@@ -1,0 +1,274 @@
+---
+title: "Volume/Tick Bar LBSL"
+author: "Mehrin Khan"
+date: "2024-08-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r}
+```
+
+
+```{r pressure, echo=FALSE}
+
+# necessary libraries
+
+library(shiny)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(rvest)  # For web scraping
+library(plotly)
+
+
+# Define a function to scrape data from the website with error handling
+scrape_data <- function() {
+  url <- "https://www.dsebd.org/cbul.php"
+  
+  tryCatch({
+    webpage <- read_html(url)
+    
+    # Extract the relevant table(s)
+    table_nodes <- html_nodes(webpage, "table")
+    
+    # Assume the relevant table is the first one
+    data_table <- html_table(table_nodes[[1]], fill = TRUE)
+    
+    # Convert to data frame
+    data_df <- as.data.frame(data_table)
+    
+    # Clean column names and remove 'PB' from symbols
+    colnames(data_df) <- c("Trade Code", "Breaker %", "Tick Size", "Open Adj. Price", 
+                           "Ref. Floor Price", "Lower Limit", "Upper Limit", "Extra Column")
+    data_df <- data_df %>%
+      mutate(across(everything(), as.character)) %>%
+      mutate(across(everything(), ~ gsub("`", "", .))) %>%
+      mutate(across(everything(), ~ gsub("PB", "", .)))  # Remove 'PB'
+    
+    # Return the cleaned data frame
+    return(data_df)
+  }, error = function(e) {
+    showNotification("Failed to scrape data. Please try again later.", type = "error")
+    return(NULL)  # Return NULL in case of an error
+  })
+}
+
+# Define a function for cleaning the uploaded data
+plot_stock_data <- function(data) {
+  # Ensure the necessary columns are numeric if needed
+  numeric_columns <- c("Price", "Splits", "Turnover", "Change")
+  data[numeric_columns] <- lapply(data[numeric_columns], as.numeric)
+  
+  # Declare the SME board
+  SME <- c("AOPLC", "MAMUNAGRO", "CRAFTSMAN", "NIALCO", "MOSTFAMETL", "MASTERAGRO", 
+           "KBSEED", "ORYZAAGRO", "AMPL", "WEBCOATS", "ACHIASF", "KFL", "BENGALBISC", 
+           "APEXWEAV", "HIMADRI", "SADHESIVE", "MKFOOTWEAR", "YUSUFLOUR", "WONDERTOYS")
+  
+  # Clean the data by removing SME symbols, unwanted characters, and 'PB' from symbols
+  cleaned_data <- data %>%
+    filter(!(Symbol %in% SME)) %>%
+    mutate(Symbol = gsub("PB", "", Symbol)) %>%
+    mutate(across(where(is.character), ~ gsub("\\t\\t\\t", "", .)))
+  
+  return(cleaned_data)
+}
+
+# Define UI
+ui <- fluidPage(
+  titlePanel("Stock Data Visualization"),
+  sidebarLayout(
+    sidebarPanel(
+      fileInput("file1", "Upload CSV File 1", multiple = FALSE, accept = c(".csv")),
+      fileInput("file2", "Upload CSV File 2", multiple = FALSE, accept = c(".csv")),
+      fileInput("file3", "Upload CSV File 3", multiple = FALSE, accept = c(".csv")),
+      fileInput("file4", "Upload CSV File 4", multiple = FALSE, accept = c(".csv")),
+      fileInput("file5", "Upload CSV File 5", multiple = FALSE, accept = c(".csv")),
+      checkboxGroupInput("files_to_use", "Select Files to Include:", 
+                         choices = c("File 1" = "file1", "File 2" = "file2", 
+                                     "File 3" = "file3", "File 4" = "file4", 
+                                     "File 5" = "file5")),
+      selectInput("symbol", "Select Symbol:", choices = NULL),
+      actionButton("scrape", "Scrape Data from Website"),
+      actionButton("refresh", "Refresh Data")
+    ),
+    mainPanel(
+      uiOutput("plots"),
+      h3("Scraped Market Data"),
+      tableOutput("scraped_data"),
+      uiOutput("symbol_details")
+    )
+  )
+)
+
+# Define server logic
+server <- function(input, output, session) {
+  # Reactive value to store scraped data
+  scraped_data <- reactiveVal(NULL)
+  
+  # Function to update data
+  update_data <- function() {
+    new_data <- scrape_data()
+    if (!is.null(new_data)) {
+      scraped_data(new_data)
+    } else {
+      showNotification("Failed to scrape data. Please try again later.", type = "error")
+    }
+  }
+  
+  # Observe event to update data when button is clicked
+  observeEvent(input$scrape, {
+    update_data()
+  })
+  
+  observeEvent(input$refresh, {
+    update_data()
+  })
+  
+  # Reactive expression to load and clean the uploaded data
+  all_data <- reactive({
+    data_list <- list()
+    
+    if ("file1" %in% input$files_to_use && !is.null(input$file1)) {
+      data_list[[1]] <- read.csv(input$file1$datapath)
+    }
+    if ("file2" %in% input$files_to_use && !is.null(input$file2)) {
+      data_list[[2]] <- read.csv(input$file2$datapath)
+    }
+    if ("file3" %in% input$files_to_use && !is.null(input$file3)) {
+      data_list[[3]] <- read.csv(input$file3$datapath)
+    }
+    if ("file4" %in% input$files_to_use && !is.null(input$file4)) {
+      data_list[[4]] <- read.csv(input$file4$datapath)
+    }
+    if ("file5" %in% input$files_to_use && !is.null(input$file5)) {
+      data_list[[5]] <- read.csv(input$file5$datapath)
+    }
+    
+    if (length(data_list) > 0) {
+      combined_data <- bind_rows(data_list)
+      cleaned_data <- plot_stock_data(combined_data)
+      return(cleaned_data)
+    } else {
+      return(NULL)
+    }
+  })
+  
+  # Update the symbol selection dropdown based on the uploaded data
+  observe({
+    data <- all_data()
+    if (!is.null(data)) {
+      updateSelectInput(session, "symbol", choices = unique(data$Symbol))
+    }
+  })
+  
+  # Generate the plots based on the uploaded files and selected symbol
+  output$plots <- renderUI({
+    req(input$symbol)
+    data <- all_data()
+    if (!is.null(data)) {
+      num_files <- length(input$files_to_use)
+      plot_list <- lapply(1:num_files, function(i) {
+        plotname <- paste0("plot", i)
+        plotOutput(plotname, height = "400px")
+      })
+      do.call(tagList, lapply(seq_along(plot_list), function(i) {
+        column(12, plot_list[[i]])
+      }))
+    } else {
+      return(NULL)
+    }
+  })
+  
+  # Render each plot in the UI
+  observe({
+    data <- all_data()
+    if (!is.null(data)) {
+      num_files <- length(input$files_to_use)
+      lapply(1:num_files, function(i) {
+        output[[paste0("plot", i)]] <- renderPlot({
+          req(input$symbol)
+          filtered_data <- data %>% 
+            filter(Symbol == input$symbol) %>% 
+            filter(!is.na(Side)) %>% 
+            group_by(Price, Side) %>% 
+            summarize(TotalQuantity = sum(Quantity, na.rm = TRUE), .groups = 'drop')
+          
+          ggplot(filtered_data, aes(x = as.factor(Price), y = TotalQuantity, fill = Side)) +
+            geom_bar(stat = "identity", position = "stack") +
+            labs(x = "Price", y = "Total Quantity", 
+                 title = paste("Total Quantity of Shares Bought and Sold at Each Price for", 
+                               input$symbol, "(File", i, ")")) +
+            theme_minimal() +
+            scale_x_discrete(name = "Price") +
+            scale_y_continuous(name = "Total Quantity", labels = scales::comma) +
+            theme(axis.text.x = element_text(angle = 45, hjust = 1))
+        })
+      })
+    }
+  })
+  
+  # Render the scraped data table
+  output$scraped_data <- renderTable({
+    data <- scraped_data()
+    if (!is.null(data)) {
+      head(data, 10)  # Show the first 10 rows for simplicity
+    }
+  })
+  
+  # Render the symbol details table
+  output$symbol_details <- renderUI({
+    req(input$symbol)
+    data <- scraped_data()
+    if (!is.null(data)) {
+      symbol_info <- data %>% filter(`Trade Code` == input$symbol)
+      if (nrow(symbol_info) > 0) {
+        fluidRow(
+          column(12, h4("Detailed Information for Selected Symbol"),
+                 tableOutput("symbol_info_table"))
+        )
+      }
+    } else {
+      return(NULL)
+    }
+  })
+  
+  # Render the table with detailed symbol information
+  output$symbol_info_table <- renderTable({
+    req(input$symbol)
+    data <- scraped_data()
+    if (!is.null(data)) {
+      symbol_info <- data %>% 
+        filter(`Trade Code` == input$symbol) %>%
+        select(`Trade Code`, `Breaker %`, `Tick Size`, `Open Adj. Price`, 
+               `Ref. Floor Price`, `Lower Limit`, `Upper Limit`)
+      return(symbol_info)
+    } else {
+      return(NULL)
+    }
+  })
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
